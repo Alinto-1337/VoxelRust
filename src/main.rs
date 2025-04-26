@@ -1,5 +1,8 @@
 
 use glfw::{fail_on_errors, Action, Key, Window, WindowHint, ClientApiHint};
+use std::env;
+mod render_backend;
+use render_backend::test_render_pipeline_builder::TestRenderPipelineBuilder;
 
 struct State<'a> {
     instance: wgpu::Instance,
@@ -9,6 +12,7 @@ struct State<'a> {
     config: wgpu::SurfaceConfiguration,
     size: (i32, i32),
     window: &'a mut Window,
+    render_pipeline: wgpu::RenderPipeline,
 }
 
 impl<'a> State<'a> 
@@ -28,7 +32,7 @@ impl<'a> State<'a>
 
         // ---- 💻 Create a surface 💻 ----
         // Surface: the area/pixels on the screen in the window
-        let surface = unsafe { instance.create_surface(&window).expect("Failed to create surface") };
+        let surface = instance.create_surface(window.render_context()).unwrap();
 
 
         // ---- 📋 Request Adaptor 📋 ----
@@ -83,6 +87,11 @@ impl<'a> State<'a>
         };
         surface.configure(&device, &config);
 
+        // Build Render pipeline
+        let mut pipeline_builder = TestRenderPipelineBuilder::new();
+        pipeline_builder.set_shader_module("shaders/test_shader1.wgsl", "vs_main", "fs_main");
+        pipeline_builder.set_pixel_format(config.format);
+        let render_pipeline: wgpu::RenderPipeline = pipeline_builder.build_pipeline(&device);
 
         // 📥 Return 📥
         Self {
@@ -93,6 +102,7 @@ impl<'a> State<'a>
             queue,
             config,
             size,
+            render_pipeline
         }
         
     }
@@ -128,20 +138,22 @@ impl<'a> State<'a>
 
 
         // ---- Create Color Attachment 🎨
+        // 
         let color_attachment = wgpu::RenderPassColorAttachment {
             view: &image_view,
             resolve_target: None,
             ops: wgpu::Operations {
                 load: wgpu::LoadOp::Clear(wgpu::Color {
-                    r: 0.75,
+                    r: 0.5,
                     g: 0.5,
-                    b: 0.25,
+                    b: 0.75,
                     a: 1.0
                 }),
                 store: wgpu::StoreOp::Store,
             },
         };
 
+        // descriptor data for a renderpass
         let render_pass_descriptor = wgpu::RenderPassDescriptor {
             label: Some("Render Pass"),
             color_attachments: &[Some(color_attachment)],
@@ -150,9 +162,17 @@ impl<'a> State<'a>
             timestamp_writes: None
         };
 
-        command_encoder.begin_render_pass(&render_pass_descriptor);
+        // transforms the descriptor data into a RenderPass to the RenderEncoder 
+        {
+            let mut renderpass = command_encoder.begin_render_pass(&render_pass_descriptor);
+            renderpass.set_pipeline(&self.render_pipeline);
+            renderpass.draw(0..3, 0..1);
+        }
+
+        // Finish the commandEncoder and push the returned CommandBuffer to the Queue (to the GPU)
         self.queue.submit(std::iter::once(command_encoder.finish()));
 
+        // Makes the drawable be presented on the owning surface
         drawable.present();
 
         Ok(())
@@ -161,6 +181,7 @@ impl<'a> State<'a>
 
 }
 
+
 async fn run() {
 
     let mut glfw = glfw::init(fail_on_errors!())
@@ -168,9 +189,10 @@ async fn run() {
     ;
 
     glfw.window_hint(WindowHint::ClientApi(ClientApiHint::NoApi));
+    
     let (mut window, events) = 
         glfw.create_window(
-            800, 600, "WHAT'S GAY PEGGING ULTIMATE", 
+            800, 600, "Awesome Voxel Game", 
             glfw::WindowMode::Windowed).unwrap()
     ;
     
@@ -178,10 +200,14 @@ async fn run() {
 
     // make the window "poll" (send a message, like event) certain events 
     state.window.set_framebuffer_size_polling(true);
+    state.window.set_size_polling(true);
     state.window.set_key_polling(true);
     state.window.set_mouse_button_polling(true);
     state.window.set_pos_polling(true);
 
+    
+
+    // tick loop
     while !state.window.should_close() {
         glfw.poll_events();
         for (_, event) in glfw::flush_messages(&events) {
@@ -222,6 +248,14 @@ async fn run() {
 
 fn main() 
 {
+    unsafe { env::set_var("GLFW_PLATFORM", "wayland"); }
+
+    let key = "GLFW_PLATFORM";
+    match env::var(key) {
+        Ok(val) => println!("{key}: {val:?}"),
+        Err(e) => println!("couldn't interpret {key}: {e}"),
+    }
+
     pollster::block_on(run())
 }
 
